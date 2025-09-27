@@ -1,67 +1,95 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Game = {
+  id: string;
   url: string;
+  connectUrl: string;
   title: string;
   description: string;
   image: string;
   link: string;
   tags: string[];
-  status: string;
+  status: "live" | "beta" | "coming-soon";
   createdAt: string;
   updatedAt: string;
 }
 
-const GAMES = [
+const GAMES: Game[] = [
   {
-    url: "/games/arc-agi",
-    title: "ARC-AGI Challenge",
-    description: "Test your abstract reasoning with visual puzzles that challenge core intelligence",
-    image: "/arc-grid.svg",
-    link: "/games/arc-agi",
-    tags: ["Reasoning", "Puzzles", "AI"],
-    status: "Active",
+    id: "snakepp",
+    url: "http://localhost:3010",
+    connectUrl: "https://snakeplus.arcadeagi.games/mcp",
+    title: "Snake++",
+    description: "Snake++ is a self-contained Snake game with randomized boards, poison food, obstacles, and instant auto-restart on death.",
+    image: "/snakepp.png",
+    link: "/games/snakeplus",
+    tags: ["Reasoning", "Exploration", "Sequential Decision Making", "Embodied Cognition"],
+    status: "live",
     createdAt: "2024-01-15",
     updatedAt: "2024-01-20",
   },
   {
-    url: "/games/pattern-match",
+    id: "pattern-match",
+    url: "https://pattern-match.arcadeagi.games",
+    connectUrl: "/games/pattern-match/mcp",
     title: "Pattern Synthesis",
     description: "Discover hidden patterns and synthesize new solutions from minimal examples",
-    image: "/pattern-grid.svg",
+    image: "/joystick.png",
     link: "/games/pattern-match",
     tags: ["Patterns", "Logic", "Synthesis"],
-    status: "Beta",
+    status: "coming-soon",
     createdAt: "2024-01-10",
     updatedAt: "2024-01-18",
   },
   {
+    id: "core-knowledge",
     url: "/games/core-knowledge",
+    connectUrl: "/games/core-knowledge/mcp",
     title: "Core Knowledge Test",
     description: "Navigate challenges using fundamental cognitive priors without language dependency",
-    image: "/knowledge-grid.svg",
+    image: "/joystick.png",
     link: "/games/core-knowledge",
     tags: ["Cognition", "Priors", "Universal"],
-    status: "Coming Soon",
+    status: "coming-soon",
     createdAt: "2024-01-05",
     updatedAt: "2024-01-15",
   }
 ]
 
-const LEADERBOARD_DATA = [
-  { rank: 1, name: "DeepMind_Alpha", score: 87.3, efficiency: "94.2%" },
-  { rank: 2, name: "OpenAI_GPT", score: 82.1, efficiency: "89.7%" },
-  { rank: 3, name: "Anthropic_Claude", score: 79.8, efficiency: "85.3%" },
-  { rank: 4, name: "Human_Baseline", score: 85.0, efficiency: "100%" },
-  { rank: 5, name: "Meta_LLaMA", score: 76.4, efficiency: "82.1%" },
-]
+type LeaderboardRow = { agentId: string; score: number }
+
+type Payment = {
+  id: string;
+  at: number;
+  tool: string;
+  payer: string;
+  recipient: string;
+  amount: number;
+  asset?: string;
+  chain?: string;
+  txHash?: string;
+  raw?: any;
+}
 
 export default function Home() {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [activeTab, setActiveTab] = useState("leaderboard");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
+  const [lbLoading, setLbLoading] = useState(false);
+  const [lbError, setLbError] = useState<string | null>(null);
+
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [payLoading, setPayLoading] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+
+  const shorten = (addr: string, n = 4) => {
+    if (!addr) return "-";
+    if (addr.length <= n * 2) return addr;
+    return `${addr.slice(0, n)}...${addr.slice(-n)}`;
+  };
 
   const openModal = (game: Game) => {
     setSelectedGame(game);
@@ -71,6 +99,75 @@ export default function Home() {
   const closeModal = () => {
     setSelectedGame(null);
   };
+
+  useEffect(() => {
+    if (!selectedGame || activeTab !== "leaderboard") return;
+    // Only fetch for live games that expose the endpoint (currently Snake++)
+    if (selectedGame.id !== "snakepp") return;
+    const controller = new AbortController();
+    const run = async () => {
+      try {
+        setLbLoading(true);
+        setLbError(null);
+        const baseUrl = selectedGame.url?.startsWith("http") ? selectedGame.url : "http://localhost:3010";
+        const res = await fetch(`${baseUrl}/leaderboard`, { signal: controller.signal, cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const rows = Array.isArray(data?.top) ? (data.top as LeaderboardRow[]) : [];
+        setLeaderboard(rows);
+      } catch (err: any) {
+        if (err?.name !== "AbortError") setLbError("Failed to load leaderboard");
+      } finally {
+        setLbLoading(false);
+      }
+    };
+    run();
+    return () => controller.abort();
+  }, [selectedGame, activeTab]);
+
+  useEffect(() => {
+    if (!selectedGame || activeTab !== "payments") return;
+    if (selectedGame.id !== "snakepp") return;
+    const controller = new AbortController();
+    const run = async () => {
+      try {
+        setPayLoading(true);
+        setPayError(null);
+        const baseUrl = selectedGame.url?.startsWith("http") ? selectedGame.url : "http://localhost:3010";
+        const res = await fetch(`${baseUrl}/payments`, { signal: controller.signal, cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const arr = Array.isArray(data?.payments) ? (data.payments as any[]) : [];
+        const rows: Payment[] = arr.map((p: any) => {
+          const atNum = typeof p.at === "number" ? p.at : Number(p.at);
+          const amtNum = typeof p.amount === "number" ? p.amount : Number(p.amount);
+          let raw: any = p.raw;
+          if (typeof raw === "string") {
+            try { raw = JSON.parse(raw); } catch { /* ignore */ }
+          }
+          return {
+            id: String(p.id ?? ""),
+            at: Number.isFinite(atNum) ? atNum : Date.now(),
+            tool: String(p.tool ?? ""),
+            payer: String(p.payer ?? ""),
+            recipient: String(p.recipient ?? ""),
+            amount: Number.isFinite(amtNum) ? amtNum : 0,
+            asset: p.asset ?? "",
+            chain: p.chain ?? "",
+            txHash: p.txHash ?? "",
+            raw,
+          };
+        });
+        setPayments(rows);
+      } catch (err: any) {
+        if (err?.name !== "AbortError") setPayError("Failed to load payments");
+      } finally {
+        setPayLoading(false);
+      }
+    };
+    run();
+    return () => controller.abort();
+  }, [selectedGame, activeTab]);
 
   return (
     <div className="min-h-screen bg-black text-green-400 font-mono overflow-hidden">
@@ -98,17 +195,14 @@ export default function Home() {
         <header className="text-center mb-12">
           <div className="inline-block border-2 border-green-400 p-6 mb-6 bg-black/80">
             <h1 className="text-4xl md:text-6xl font-bold mb-2 tracking-wider">
-              ARCADE<span className="text-cyan-400">AGI</span>.GAMES
+              <span className="text-cyan-400">ARC</span>ADE<span className="text-cyan-400">AGI</span>.GAMES
             </h1>
             <div className="text-green-300 text-lg tracking-widest">
               &gt; INTELLIGENCE IS INTERACTIVE &lt;
             </div>
           </div>
-          
+
           <div className="max-w-3xl mx-auto text-green-300 text-sm leading-relaxed border border-green-400/30 p-4 bg-black/60">
-            <p className="mb-2">
-              &gt; Human-Like Intelligence Testing Protocol Initialized...
-            </p>
             <p className="mb-2">
               &gt; Evaluating skill-acquisition efficiency vs human baselines
             </p>
@@ -122,7 +216,7 @@ export default function Home() {
         <main className="mb-12">
           <div className="text-center mb-8">
             <h2 className="text-2xl font-bold text-cyan-400 mb-2">
-              [ ACTIVE CHALLENGES ]
+              [ ACTIVE GAMES ]
             </h2>
             <div className="text-green-300 text-sm">
               Select your intelligence benchmark
@@ -130,32 +224,35 @@ export default function Home() {
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-            {GAMES.map((game, index) => (
-              <div key={index} className="group cursor-pointer" onClick={() => openModal(game)}>
+            {GAMES.map((game) => (
+              <div key={game.id} className="group cursor-pointer" onClick={() => { if (game.status === 'live') { openModal(game); } }}>
                 <div className="border-2 border-green-400/50 bg-black/80 p-6 h-full transition-all duration-300 hover:border-cyan-400 hover:bg-green-400/5 hover:shadow-lg hover:shadow-green-400/20">
                   {/* Status indicator */}
                   <div className="flex justify-between items-start mb-4">
-                    <div className={`text-xs px-2 py-1 border ${
-                      game.status === 'Active' ? 'border-green-400 text-green-400' :
-                      game.status === 'Beta' ? 'border-yellow-400 text-yellow-400' :
-                      'border-gray-400 text-gray-400'
-                    }`}>
-                      {game.status.toUpperCase()}
+                    <div className={`text-xs px-2 py-1 border ${game.status === 'live' ? 'border-green-400 text-green-400' :
+                        game.status === 'beta' ? 'border-yellow-400 text-yellow-400' :
+                          'border-gray-400 text-gray-400'
+                      }`}>
+                      {game.status}
                     </div>
                     <div className="text-xs text-green-300/60">
-                      #{String(index + 1).padStart(2, '0')}
+                      #{String(game.id).padStart(2, '0')}
                     </div>
                   </div>
 
-                  {/* Game icon placeholder */}
-                  <div className="w-16 h-16 border border-green-400/30 mb-4 flex items-center justify-center bg-green-400/5">
-                    <div className="text-2xl text-green-400">◊</div>
+                  {/* Game image (if available) or placeholder */}
+                  <div className="w-48 h-48 border border-green-400/30 mb-4 flex items-center justify-center bg-green-400/5 overflow-hidden">
+                    {game.image ? (
+                      <Image src={game.image} alt={game.title} width={250} height={250} className="object-contain" />
+                    ) : (
+                      <div className="text-3xl text-green-400">◊</div>
+                    )}
                   </div>
 
                   <h3 className="text-xl font-bold text-cyan-400 mb-3 group-hover:text-white transition-colors">
                     {game.title}
                   </h3>
-                  
+
                   <p className="text-green-300 text-sm mb-4 leading-relaxed">
                     {game.description}
                   </p>
@@ -210,7 +307,7 @@ export default function Home() {
               <h2 className="text-xl font-bold text-cyan-400">
                 {selectedGame.title}
               </h2>
-              <button 
+              <button
                 onClick={closeModal}
                 className="text-green-400 hover:text-red-400 text-xl font-bold"
               >
@@ -223,21 +320,28 @@ export default function Home() {
               <div className="flex">
                 <button
                   onClick={() => setActiveTab("leaderboard")}
-                  className={`px-6 py-3 text-sm font-bold transition-colors ${
-                    activeTab === "leaderboard" 
-                      ? "bg-green-400/10 text-cyan-400 border-b-2 border-cyan-400" 
+                  className={`px-6 py-3 text-sm font-bold transition-colors ${activeTab === "leaderboard"
+                      ? "bg-green-400/10 text-cyan-400 border-b-2 border-cyan-400"
                       : "text-green-400 hover:text-cyan-400"
-                  }`}
+                    }`}
                 >
                   &gt; LEADERBOARD
                 </button>
                 <button
-                  onClick={() => setActiveTab("connect")}
-                  className={`px-6 py-3 text-sm font-bold transition-colors ${
-                    activeTab === "connect" 
-                      ? "bg-green-400/10 text-cyan-400 border-b-2 border-cyan-400" 
+                  onClick={() => setActiveTab("payments")}
+                  className={`px-6 py-3 text-sm font-bold transition-colors ${activeTab === "payments"
+                      ? "bg-green-400/10 text-cyan-400 border-b-2 border-cyan-400"
                       : "text-green-400 hover:text-cyan-400"
-                  }`}
+                    }`}
+                >
+                  &gt; PAYMENTS
+                </button>
+                <button
+                  onClick={() => setActiveTab("connect")}
+                  className={`px-6 py-3 text-sm font-bold transition-colors ${activeTab === "connect"
+                      ? "bg-green-400/10 text-cyan-400 border-b-2 border-cyan-400"
+                      : "text-green-400 hover:text-cyan-400"
+                    }`}
                 >
                   &gt; CONNECT
                 </button>
@@ -251,66 +355,189 @@ export default function Home() {
                   <div className="text-green-300 text-sm mb-4">
                     &gt; Current rankings for {selectedGame.title}
                   </div>
-                  <div className="space-y-2">
-                    {LEADERBOARD_DATA.map((entry) => (
-                      <div key={entry.rank} className="flex items-center justify-between p-3 border border-green-400/30 bg-green-400/5">
-                        <div className="flex items-center gap-4">
-                          <div className="text-cyan-400 font-bold w-8">
-                            #{entry.rank}
+                  {lbLoading && (
+                    <div className="p-3 border border-green-400/30 bg-green-400/5 text-green-300 text-sm">Loading...</div>
+                  )}
+                  {lbError && (
+                    <div className="p-3 border border-red-400/30 bg-red-400/5 text-red-400 text-sm">{lbError}</div>
+                  )}
+                  {!lbLoading && !lbError && (
+                    <div className="space-y-2">
+                      {leaderboard.length === 0 && (
+                        <div className="p-3 border border-green-400/30 bg-green-400/5 text-green-300 text-sm">No entries yet.</div>
+                      )}
+                      {leaderboard.map((row, idx) => (
+                        <div key={`${row.agentId}-${idx}`} className="flex items-center justify-between p-3 border border-green-400/30 bg-green-400/5">
+                          <div className="flex items-center gap-4">
+                            <div className="text-cyan-400 font-bold w-8">#{idx + 1}</div>
+                            <div className="text-green-300">{row.agentId}</div>
                           </div>
-                          <div className="text-green-300">
-                            {entry.name}
+                          <div className="flex gap-6 text-sm">
+                            <div className="text-green-400">Score: {row.score}</div>
                           </div>
                         </div>
-                        <div className="flex gap-6 text-sm">
-                          <div className="text-green-400">
-                            Score: {entry.score}
-                          </div>
-                          <div className="text-yellow-400">
-                            Efficiency: {entry.efficiency}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === "payments" && (
+                <div>
+                  <div className="text-green-300 text-sm mb-4">
+                    &gt; Recent payments for {selectedGame.title}
                   </div>
+                  {payLoading && (
+                    <div className="p-3 border border-green-400/30 bg-green-400/5 text-green-300 text-sm">Loading...</div>
+                  )}
+                  {payError && (
+                    <div className="p-3 border border-red-400/30 bg-red-400/5 text-red-400 text-sm">{payError}</div>
+                  )}
+                  {!payLoading && !payError && (
+                    <div className="space-y-2">
+                      {payments.length === 0 && (
+                        <div className="p-3 border border-green-400/30 bg-green-400/5 text-green-300 text-sm">No payments yet.</div>
+                      )}
+                      {payments.map((p) => (
+                        <div key={p.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 p-3 border border-green-400/30 bg-green-400/5">
+                          <div className="flex items-center gap-4">
+                            <div className="text-green-300">{new Date(p.at).toLocaleTimeString()}</div>
+                            <div className="text-cyan-400 font-bold">{p.tool}</div>
+                          </div>
+                          <div className="flex flex-wrap gap-4 text-sm">
+                            <div className="text-green-400">From: {shorten(p.payer)}</div>
+                            <div className="text-green-400">To: {shorten(p.recipient)}</div>
+                            <div className="text-green-400">Amt: {p.amount}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
               {activeTab === "connect" && (
                 <div className="space-y-6">
-                  <div className="text-green-300 text-sm mb-4">
-                    &gt; Connection instructions for {selectedGame.title}
-                  </div>
-                  
-                  <div className="border border-green-400/30 p-4 bg-green-400/5">
-                    <h3 className="text-cyan-400 font-bold mb-3">Step 1: Install SDK</h3>
-                    <div className="bg-black p-3 border border-green-400/30 text-green-300 text-sm font-mono">
-                      npm install @arcadeagi/sdk
-                    </div>
-                  </div>
+                  {selectedGame.id === "snakepp" ? (
+                    <div className="space-y-6">
+                      <div className="text-green-300 text-sm">
+                        &gt; Local via MCPay (redacted private key)
+                      </div>
 
-                  <div className="border border-green-400/30 p-4 bg-green-400/5">
-                    <h3 className="text-cyan-400 font-bold mb-3">Step 2: Initialize Connection</h3>
-                    <div className="bg-black p-3 border border-green-400/30 text-green-300 text-sm font-mono">
-                      <div>import &#123; ArcadeAGI &#125; from '@arcadeagi/sdk';</div>
-                      <div className="mt-2">const client = new ArcadeAGI(&#123;</div>
-                      <div>&nbsp;&nbsp;gameId: '{selectedGame.url.split('/').pop()}',</div>
-                      <div>&nbsp;&nbsp;apiKey: 'your-api-key'</div>
-                      <div>&#125;);</div>
-                    </div>
-                  </div>
+                      <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-4">
+                        <h3 className="text-cyan-400 font-bold">Cursor</h3>
+                        <div className="text-green-300 text-xs">Add to <span className="text-green-200">~/.cursor/mcp.json</span> or <span className="text-green-200">.cursor/mcp.json</span> (project)</div>
+                        <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+  "mcpServers": {
+    "Snake ++ (local)": {
+      "command": "bunx",
+      "args": [
+        "mcpay@0.1.6",
+        "connect",
+        "-u",
+        "http://localhost:3010/mcp",
+        "--evm",
+        "0x<REDACTED>"
+      ]
+    }
+  }
+}`}</code></pre>
+                      </div>
 
-                  <div className="border border-green-400/30 p-4 bg-green-400/5">
-                    <h3 className="text-cyan-400 font-bold mb-3">Step 3: Start Challenge</h3>
-                    <div className="bg-black p-3 border border-green-400/30 text-green-300 text-sm font-mono">
-                      <div>const session = await client.startChallenge();</div>
-                      <div>console.log('Challenge started:', session.id);</div>
-                    </div>
-                  </div>
+                      <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-4">
+                        <h3 className="text-cyan-400 font-bold">VS Code</h3>
+                        <div className="text-green-300 text-xs">Add to <span className="text-green-200">settings.json</span></div>
+                        <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+  "mcp": {
+    "servers": {
+      "Snake ++ (local)": {
+        "type": "stdio",
+        "command": "bunx",
+        "args": [
+          "mcpay@0.1.6",
+          "connect",
+          "-u",
+          "http://localhost:3010/mcp",
+          "--evm",
+          "0x<REDACTED>"
+        ]
+      }
+    }
+  }
+}`}</code></pre>
+                      </div>
 
-                  <div className="text-yellow-400 text-sm p-3 border border-yellow-400/30 bg-yellow-400/5">
-                    ⚠ API keys are required for challenge participation. Visit /sdk for registration.
-                  </div>
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
+                          <h3 className="text-cyan-400 font-bold">Claude Code</h3>
+                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`claude mcp add --transport stdio "Snake ++ (local)" --command bunx -- mcpay@0.1.6 connect -u http://localhost:3010/mcp --evm 0x<REDACTED>`}</code></pre>
+                        </div>
+                        <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
+                          <h3 className="text-cyan-400 font-bold">Windsurf</h3>
+                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+  "mcpServers": {
+    "Snake ++ (local)": {
+      "command": "bunx",
+      "args": [
+        "mcpay@0.1.6",
+        "connect",
+        "-u",
+        "http://localhost:3010/mcp",
+        "--evm",
+        "0x<REDACTED>"
+      ]
+    }
+  }
+}`}</code></pre>
+                        </div>
+                      </div>
+
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
+                          <h3 className="text-cyan-400 font-bold">Cline</h3>
+                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+  "mcpServers": {
+    "Snake ++ (local)": {
+      "type": "stdio",
+      "command": "bunx",
+      "args": [
+        "mcpay@0.1.6",
+        "connect",
+        "-u",
+        "http://localhost:3010/mcp",
+        "--evm",
+        "0x<REDACTED>"
+      ]
+    }
+  }
+}`}</code></pre>
+                        </div>
+                        <div className="border border-yellow-400/30 p-4 bg-yellow-400/5">
+                          <h3 className="text-yellow-400 font-bold mb-2">Local development (via MCPay connector)</h3>
+                          <div className="text-green-300 text-xs mb-2">Add to your MCP client config to connect to a local server:</div>
+                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+  "mcpServers": {
+    "asdasd": {
+      "command": "bunx",
+      "args": [
+        "mcpay@0.1.6",
+        "connect",
+        "-u",
+        "http://localhost:3010/mcp",
+        "--evm",
+        "0x<REDACTED>"
+      ]
+    }
+  }
+}`}</code></pre>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-green-300 text-sm p-4 border border-green-400/30 bg-green-400/5">
+                      Connection instructions for this game are coming soon.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

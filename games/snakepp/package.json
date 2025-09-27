@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@mcp-ui/server": "^5.11.0",
+    "@upstash/redis": "^1.31.6",
     "hono": "^4.9.9",
     "mcpay": "^0.1.6",
     "zod": "3.24.2"
