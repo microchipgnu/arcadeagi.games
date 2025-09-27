@@ -23,3 +23,16 @@ IRBs aren't just better metrics; they're a clear signal that there is a wide gap
 
 As long as that gap remains, we do not have AGI.
 
+
+
+---
+
+
+GAMES
+
+SHOW SDK
+
+
+--- 
+
+ARC AGI 

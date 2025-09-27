@@ -10,8 +10,9 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@mcp-ui/server": "^5.11.0",
     "hono": "^4.9.9",
     "mcpay": "^0.1.6",
-    "zod": "^4.1.11"
+    "zod": "3.24.2"
   }
 }
