@@ -8,5 +8,10 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "hono": "^4.9.9",
+    "mcpay": "^0.1.6",
+    "zod": "^4.1.11"
   }
 }
