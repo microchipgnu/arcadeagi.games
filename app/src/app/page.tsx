@@ -20,8 +20,8 @@ type Game = {
 const GAMES: Game[] = [
   {
     id: "snakepp",
-    url: "http://localhost:3010",
-    connectUrl: "https://snakeplus.arcadeagi.games/mcp",
+    url: "https://snakepp.arcadeagi.games",
+    connectUrl: "https://snakepp.arcadeagi.games/mcp",
     title: "Snake++",
     description: "Snake++ is a self-contained Snake game with randomized boards, poison food, obstacles, and instant auto-restart on death.",
     image: "/snakepp.png",
@@ -85,6 +85,11 @@ export default function Home() {
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
 
+  // Resolve the MCP URL shown to the user (prefer the game's connectUrl if absolute)
+  const mcpUrl = selectedGame?.connectUrl?.startsWith("http")
+    ? selectedGame.connectUrl
+    : "http://localhost:3010/mcp";
+
   const shorten = (addr: string, n = 4) => {
     if (!addr) return "-";
     if (addr.length <= n * 2) return addr;
@@ -109,7 +114,11 @@ export default function Home() {
       try {
         setLbLoading(true);
         setLbError(null);
-        const baseUrl = selectedGame.url?.startsWith("http") ? selectedGame.url : "http://localhost:3010";
+        const baseUrl = selectedGame.url?.startsWith("http")
+          ? selectedGame.url
+          : (selectedGame.connectUrl?.startsWith("http")
+            ? new URL(selectedGame.connectUrl).origin
+            : "http://localhost:3010");
         const res = await fetch(`${baseUrl}/leaderboard`, { signal: controller.signal, cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -133,7 +142,11 @@ export default function Home() {
       try {
         setPayLoading(true);
         setPayError(null);
-        const baseUrl = selectedGame.url?.startsWith("http") ? selectedGame.url : "http://localhost:3010";
+        const baseUrl = selectedGame.url?.startsWith("http")
+          ? selectedGame.url
+          : (selectedGame.connectUrl?.startsWith("http")
+            ? new URL(selectedGame.connectUrl).origin
+            : "http://localhost:3010");
         const res = await fetch(`${baseUrl}/payments`, { signal: controller.signal, cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -435,7 +448,7 @@ export default function Home() {
         "mcpay@0.1.6",
         "connect",
         "-u",
-        "http://localhost:3010/mcp",
+        "${mcpUrl}",
         "--evm",
         "0x<REDACTED>"
       ]
@@ -457,7 +470,7 @@ export default function Home() {
           "mcpay@0.1.6",
           "connect",
           "-u",
-          "http://localhost:3010/mcp",
+          "${mcpUrl}",
           "--evm",
           "0x<REDACTED>"
         ]
@@ -470,11 +483,11 @@ export default function Home() {
                       <div className="grid md:grid-cols-2 gap-4">
                         <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
                           <h3 className="text-cyan-400 font-bold">Claude Code</h3>
-                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`claude mcp add --transport stdio "Snake ++ (local)" --command bunx -- mcpay@0.1.6 connect -u http://localhost:3010/mcp --evm 0x<REDACTED>`}</code></pre>
+                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`claude mcp add --transport stdio "Snake ++ (local)" --command bunx -- mcpay@0.1.6 connect -u ${mcpUrl} --evm 0x<REDACTED>`}</code></pre>
                         </div>
                         <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
                           <h3 className="text-cyan-400 font-bold">Windsurf</h3>
-                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+                        <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
   "mcpServers": {
     "Snake ++ (local)": {
       "command": "bunx",
@@ -482,7 +495,7 @@ export default function Home() {
         "mcpay@0.1.6",
         "connect",
         "-u",
-        "http://localhost:3010/mcp",
+        "${mcpUrl}",
         "--evm",
         "0x<REDACTED>"
       ]
@@ -495,7 +508,7 @@ export default function Home() {
                       <div className="grid md:grid-cols-2 gap-4">
                         <div className="border border-green-400/30 p-4 bg-green-400/5 space-y-3">
                           <h3 className="text-cyan-400 font-bold">Cline</h3>
-                          <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
+                        <pre className="bg-black p-3 border border-green-400/30 text-green-300 text-xs overflow-auto"><code>{`{
   "mcpServers": {
     "Snake ++ (local)": {
       "type": "stdio",
@@ -504,7 +517,7 @@ export default function Home() {
         "mcpay@0.1.6",
         "connect",
         "-u",
-        "http://localhost:3010/mcp",
+        "${mcpUrl}",
         "--evm",
         "0x<REDACTED>"
       ]
