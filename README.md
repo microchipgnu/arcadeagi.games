@@ -16,4 +16,6 @@ Our mission is simple: turn benchmarks into interactive, open, and incentivized 
 
 # Arcade
 
-In the Arcade you find all the 
+![](/assets/arcade.png)
+
+In the Arcade you find all the current games to play.

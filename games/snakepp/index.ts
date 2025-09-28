@@ -35,14 +35,31 @@ const DEFAULT_PALETTE = [
     "#00FFFF", // 7 cyan
 ]
 
-let meta: CanvasMeta = {
-    width: 10,
-    height: 10,
-    palette: DEFAULT_PALETTE.slice(),
+// Per-episode canvas helpers (no process-wide globals)
+function createEmptyCanvas(width: number, height: number): { meta: CanvasMeta; pixels: Uint8Array } {
+    const meta: CanvasMeta = { width, height, palette: DEFAULT_PALETTE.slice() }
+    const pixels = new Uint8Array(width * height)
+    return { meta, pixels }
 }
 
-// pixels store palette index per cell (palette index)
-let pixels = new Uint8Array(meta.width * meta.height)
+function canvasToState(meta: CanvasMeta, pixels: Uint8Array): CanvasState {
+    const pixelsBase64 = Buffer.from(pixels).toString("base64")
+    return { meta, pixelsBase64 }
+}
+
+async function pixelsToGrid(meta: CanvasMeta, pixels: Uint8Array): Promise<string[][]> {
+    const grid: string[][] = []
+    for (let y = 0; y < meta.height; y++) {
+        const row: string[] = []
+        for (let x = 0; x < meta.width; x++) {
+            const idx = y * meta.width + x
+            const cIdx = pixels[idx] ?? 0
+            row.push(meta.palette[cIdx] || "#000000")
+        }
+        grid.push(row)
+    }
+    return grid
+}
 
 // -----------------------------
 // RNG with serializable state
@@ -50,39 +67,39 @@ let pixels = new Uint8Array(meta.width * meta.height)
 type RngState = { a: number; b: number; c: number; d: number }
 
 function createRngFromSeed(seed: number): { rng: () => number; state: RngState } {
-	// sfc32 seeded deterministically from a single seed
-	const state: RngState = {
-		a: (seed >>> 0) || 1,
-		b: (seed * 48271 >>> 0) || 2,
-		c: (seed * 279470273 >>> 0) || 3,
-		d: (seed * 4294967291 >>> 0) || 4,
-	}
-	const rng = () => {
-		state.a >>>= 0; state.b >>>= 0; state.c >>>= 0; state.d >>>= 0
-		let t = (state.a + state.b) | 0
-		state.a = state.b ^ (state.b >>> 9)
-		state.b = (state.c + (state.c << 3)) | 0
-		state.c = (state.c << 21) | (state.c >>> 11)
-		state.d = (state.d + 1) | 0
-		t = (t + state.d) | 0
-		state.c = (state.c + t) | 0
-		return (t >>> 0) / 4294967296
-	}
-	return { rng, state }
+    // sfc32 seeded deterministically from a single seed
+    const state: RngState = {
+        a: (seed >>> 0) || 1,
+        b: (seed * 48271 >>> 0) || 2,
+        c: (seed * 279470273 >>> 0) || 3,
+        d: (seed * 4294967291 >>> 0) || 4,
+    }
+    const rng = () => {
+        state.a >>>= 0; state.b >>>= 0; state.c >>>= 0; state.d >>>= 0
+        let t = (state.a + state.b) | 0
+        state.a = state.b ^ (state.b >>> 9)
+        state.b = (state.c + (state.c << 3)) | 0
+        state.c = (state.c << 21) | (state.c >>> 11)
+        state.d = (state.d + 1) | 0
+        t = (t + state.d) | 0
+        state.c = (state.c + t) | 0
+        return (t >>> 0) / 4294967296
+    }
+    return { rng, state }
 }
 
 function createRngFromState(state: RngState): () => number {
-	return () => {
-		state.a >>>= 0; state.b >>>= 0; state.c >>>= 0; state.d >>>= 0
-		let t = (state.a + state.b) | 0
-		state.a = state.b ^ (state.b >>> 9)
-		state.b = (state.c + (state.c << 3)) | 0
-		state.c = (state.c << 21) | (state.c >>> 11)
-		state.d = (state.d + 1) | 0
-		t = (t + state.d) | 0
-		state.c = (state.c + t) | 0
-		return (t >>> 0) / 4294967296
-	}
+    return () => {
+        state.a >>>= 0; state.b >>>= 0; state.c >>>= 0; state.d >>>= 0
+        let t = (state.a + state.b) | 0
+        state.a = state.b ^ (state.b >>> 9)
+        state.b = (state.c + (state.c << 3)) | 0
+        state.c = (state.c << 21) | (state.c >>> 11)
+        state.d = (state.d + 1) | 0
+        t = (t + state.d) | 0
+        state.c = (state.c + t) | 0
+        return (t >>> 0) / 4294967296
+    }
 }
 
 const getPayer = (extra: any) => {
@@ -91,16 +108,16 @@ const getPayer = (extra: any) => {
         try {
             const decoded = JSON.parse(Buffer.from(paymentMeta as string, 'base64').toString());
             console.log("Payment metadata:", decoded);
-            
+
             // Extract who paid what from the payment information
             if (decoded.payload?.authorization) {
                 const auth = decoded.payload.authorization;
                 const payer = auth.from;
                 const recipient = auth.to;
                 const amount = auth.value;
-                
+
                 console.log(`Payment: ${payer} paid ${amount} to ${recipient}`);
-                
+
                 // Store or use the payment information as needed
                 return payer; // Set the agent ID to the payer
             }
@@ -115,93 +132,20 @@ function normalizeAgentId(id: string | null | undefined): string {
     return s.trim().toLowerCase() || "anonymous"
 }
 
-let currentAgentId = "anonymous"
 function resolveAgentId(extra: any, fallbackId = "anonymous"): string {
     const payer = getPayer(extra)
     const id = normalizeAgentId(payer || fallbackId)
     return id
 }
 
-function resizeCanvas(width: number, height: number) {
-    meta = { ...meta, width, height }
-    pixels = new Uint8Array(width * height)
-}
-
-// event log for replay
-const events: CanvasEvent[] = []
-
-function colorToIndex(color: string): number {
+function colorToIndex(meta: CanvasMeta, color: string): number {
     const idx = meta.palette.indexOf(color)
     if (idx >= 0) return idx
-    // fallback: if unknown, push into palette up to a limit
     if (meta.palette.length < 256) {
         meta.palette.push(color)
         return meta.palette.length - 1
     }
     return 0
-}
-
-export async function getCanvas(): Promise<CanvasState> {
-    const b64 = Buffer.from(pixels).toString("base64")
-    return { meta, pixelsBase64: b64 }
-}
-
-export async function getGrid(): Promise<string[][]> {
-    const grid: string[][] = []
-    for (let y = 0; y < meta.height; y++) {
-        const row: string[] = []
-        for (let x = 0; x < meta.width; x++) {
-            const idx = y * meta.width + x
-            const cIdx = pixels[idx] ?? 0
-            row.push(meta.palette[cIdx] || "#000000")
-        }
-        grid.push(row)
-    }
-    return grid
-}
-
-export async function getCanvasEvents({ limit }: { limit?: number } = {}): Promise<CanvasEvent[]> {
-    const slice = typeof limit === "number" ? events.slice(-limit) : events.slice()
-    return slice
-}
-
-export async function setPixel(update: PixelUpdate): Promise<{ ok: true }>
-export async function setPixel(
-    update: PixelUpdate,
-    recordEvent: boolean,
-): Promise<{ ok: true }>
-export async function setPixel(update: PixelUpdate, recordEvent = true): Promise<{ ok: true }> {
-    const { x, y, color } = update
-    if (x < 0 || y < 0 || x >= meta.width || y >= meta.height) return { ok: true }
-    const idx = y * meta.width + x
-    const colorIdx = colorToIndex(color)
-    pixels[idx] = colorIdx
-    if (recordEvent) {
-        events.push({ t: Date.now(), updates: [{ x, y, color, source: update.source }] })
-    }
-    return { ok: true }
-}
-
-export async function setPixels({ updates, source }: { updates: { x: number; y: number; color: string }[]; source: string }): Promise<{ ok: true }> {
-    const applied: PixelUpdate[] = []
-    for (const u of updates) {
-        const { x, y, color } = u
-        if (x < 0 || y < 0 || x >= meta.width || y >= meta.height) continue
-        const idx = y * meta.width + x
-        const cIdx = colorToIndex(color)
-        pixels[idx] = cIdx
-        applied.push({ x, y, color, source })
-    }
-    if (applied.length > 0) {
-        events.push({ t: Date.now(), updates: applied })
-    }
-    return { ok: true }
-}
-
-export async function clearCanvas(color = "#000000"): Promise<void> {
-    const idx = colorToIndex(color)
-    pixels.fill(idx)
-    events.push({ t: Date.now(), updates: [{ x: -1, y: -1, color, source: "system:clear" }] })
 }
 
 // Logging helper for observability parity
@@ -244,7 +188,6 @@ type SnakeGame = {
     rngState: RngState
 }
 
-let game: SnakeGame | null = null
 const GAME_ID = "snakepp"
 
 // Upstash Redis (leaderboard)
@@ -270,103 +213,127 @@ const memoryLeaderboard = new Map<string, number>()
 
 // In-memory fallback for episode state (for local dev if Redis is not configured)
 type SerializedSnakeGame = {
-	snake: Point[]
-	dir: Direction
-	food: { x: number; y: number; bad: boolean }
-	obstacles: string[]
-	alive: boolean
-	turn: number
-	pendingGrowth: number
-	rules: EpisodeRules
-	seed: number
-	stats: EpisodeStats
-	rngState: RngState
+    snake: Point[]
+    dir: Direction
+    food: { x: number; y: number; bad: boolean }
+    obstacles: string[]
+    alive: boolean
+    turn: number
+    pendingGrowth: number
+    rules: EpisodeRules
+    seed: number
+    stats: EpisodeStats
+    rngState: RngState
 }
 
 type PersistedEpisodeState = {
-	meta: CanvasMeta
-	pixelsBase64: string
-	game: SerializedSnakeGame
+    meta: CanvasMeta
+    pixelsBase64: string
+    game: SerializedSnakeGame
 }
 
 const memoryAgentStates = new Map<string, PersistedEpisodeState>()
 
 function episodeKey(agentId: string): string {
-	return `snakepp:episode:agent:${agentId}`
+    return `snakepp:episode:agent:${agentId}`
 }
 
 function serializeGame(g: SnakeGame): SerializedSnakeGame {
-	return {
-		snake: g.snake,
-		dir: g.dir,
-		food: { x: g.food.x, y: g.food.y, bad: g.food.bad },
-		obstacles: Array.from(g.obstacles),
-		alive: g.alive,
-		turn: g.turn,
-		pendingGrowth: g.pendingGrowth,
-		rules: g.rules,
-		seed: g.seed,
-		stats: g.stats,
-		rngState: g.rngState,
-	}
+    return {
+        snake: g.snake,
+        dir: g.dir,
+        food: { x: g.food.x, y: g.food.y, bad: g.food.bad },
+        obstacles: Array.from(g.obstacles),
+        alive: g.alive,
+        turn: g.turn,
+        pendingGrowth: g.pendingGrowth,
+        rules: g.rules,
+        seed: g.seed,
+        stats: g.stats,
+        rngState: g.rngState,
+    }
 }
 
 function deserializeGame(s: SerializedSnakeGame): SnakeGame {
-	const rng = createRngFromState(s.rngState)
-	return {
-		snake: s.snake,
-		dir: s.dir,
-		food: { x: s.food.x, y: s.food.y, bad: s.food.bad },
-		obstacles: new Set<string>(s.obstacles),
-		alive: s.alive,
-		turn: s.turn,
-		pendingGrowth: s.pendingGrowth,
-		rules: s.rules,
-		seed: s.seed,
-		stats: s.stats,
-		rng,
-		rngState: s.rngState,
-	}
+    const rng = createRngFromState(s.rngState)
+    return {
+        snake: s.snake,
+        dir: s.dir,
+        food: { x: s.food.x, y: s.food.y, bad: s.food.bad },
+        obstacles: new Set<string>(s.obstacles),
+        alive: s.alive,
+        turn: s.turn,
+        pendingGrowth: s.pendingGrowth,
+        rules: s.rules,
+        seed: s.seed,
+        stats: s.stats,
+        rng,
+        rngState: s.rngState,
+    }
 }
 
-async function saveAgentEpisode(agentId: string, g: SnakeGame): Promise<void> {
-	const state: PersistedEpisodeState = {
-		meta,
-		pixelsBase64: Buffer.from(pixels).toString("base64"),
-		game: serializeGame(g),
-	}
-	if (redis) {
-		try {
-			await redis.hset(episodeKey(agentId), {
-				meta: JSON.stringify(state.meta),
-				pixelsBase64: state.pixelsBase64,
-				game: JSON.stringify(state.game),
-				updatedAt: String(Date.now()),
-			})
-			return
-		} catch {
-			// fall back to memory
-		}
-	}
-	memoryAgentStates.set(agentId, state)
+async function saveAgentEpisode(agentId: string, meta: CanvasMeta, pixels: Uint8Array, g: SnakeGame, expectedTurn?: number): Promise<{ ok: true } | { ok: false; conflict: true; currentTurn: number }> {
+    const state: PersistedEpisodeState = {
+        meta,
+        pixelsBase64: Buffer.from(pixels).toString("base64"),
+        game: serializeGame(g),
+    }
+    if (redis) {
+        try {
+            if (typeof expectedTurn === "number") {
+                const existingGameJson = await (redis as any).hget(episodeKey(agentId), "game")
+                if (existingGameJson) {
+                    try {
+                        const existing = JSON.parse(existingGameJson as string) as SerializedSnakeGame
+                        if (existing.turn !== expectedTurn) {
+                            return { ok: false, conflict: true, currentTurn: existing.turn }
+                        }
+                    } catch { }
+                }
+            }
+            await redis.hset(episodeKey(agentId), {
+                meta: JSON.stringify(state.meta),
+                pixelsBase64: state.pixelsBase64,
+                game: JSON.stringify(state.game),
+                turn: String(g.turn),
+                updatedAt: String(Date.now()),
+            })
+            return { ok: true }
+        } catch {
+            // fall back to memory
+        }
+    }
+    memoryAgentStates.set(agentId, state)
+    return { ok: true }
 }
 
 async function loadAgentEpisode(agentId: string): Promise<PersistedEpisodeState | null> {
-	if (redis) {
-		try {
-			const row = await redis.hgetall<Record<string, string>>(episodeKey(agentId))
-			if (row && row.meta && row.pixelsBase64 && row.game) {
-				return {
-					meta: JSON.parse(row.meta) as CanvasMeta,
-					pixelsBase64: row.pixelsBase64,
-					game: JSON.parse(row.game) as SerializedSnakeGame,
-				}
-			}
-		} catch {
-			// ignore and try memory
-		}
-	}
-	return memoryAgentStates.get(agentId) ?? null
+    console.log(`Loading episode for agent: ${agentId}`)
+    if (redis) {
+        try {
+            console.log(`Attempting to load from Redis for agent: ${agentId}`)
+            const row = await redis.hgetall<Record<string, unknown>>(episodeKey(agentId))
+            console.log(`Redis row for ${agentId}:`, row)
+            if (row && (row as any).meta && (row as any).pixelsBase64 && (row as any).game) {
+                const metaRaw = (row as any).meta
+                const gameRaw = (row as any).game
+                const pixelsBase64 = String((row as any).pixelsBase64)
+                const meta: CanvasMeta = typeof metaRaw === 'string' ? JSON.parse(metaRaw as string) as CanvasMeta : metaRaw as CanvasMeta
+                const game: SerializedSnakeGame = typeof gameRaw === 'string' ? JSON.parse(gameRaw as string) as SerializedSnakeGame : gameRaw as SerializedSnakeGame
+                console.log(`Successfully loaded episode from Redis for agent: ${agentId}`)
+                return { meta, pixelsBase64, game }
+            }
+            console.log(`No valid episode found in Redis for agent: ${agentId}`)
+        } catch (error) {
+            console.log(`Error loading from Redis for agent ${agentId}:`, error)
+            // ignore and try memory
+        }
+    } else {
+        console.log(`Redis not available, checking memory for agent: ${agentId}`)
+    }
+    const memoryState = memoryAgentStates.get(agentId) ?? null
+    console.log(`Memory state for ${agentId}:`, memoryState ? 'found' : 'not found')
+    return memoryState
 }
 
 // Payments log (overall table)
@@ -374,43 +341,43 @@ const paymentsAllListKey = "payments:all"
 const paymentsByGameListKey = `payments:game:${GAME_ID}`
 
 async function logPaymentFromExtra(extra: any, toolName: string): Promise<void> {
-	if (!redis) return
-	try {
-		const paymentMeta = extra?._meta?.["x402/payment"]
-		if (!paymentMeta) return
-		const decodedRaw = JSON.parse(Buffer.from(paymentMeta as string, "base64").toString())
-		const auth = decodedRaw?.payload?.authorization ?? {}
-		const payer = auth.from ?? null
-		const recipient = auth.to ?? null
-		const amount = auth.value ?? null
-		const asset = auth.asset ?? decodedRaw?.asset ?? null
-		const chain = auth.chain ?? auth.chainId ?? decodedRaw?.chainId ?? null
-		const txHash = decodedRaw?.txHash ?? decodedRaw?.transactionHash ?? auth?.hash ?? null
-		const now = Date.now()
-		const id = String(txHash ?? `${now}-${Math.random().toString(36).slice(2, 10)}`)
+    if (!redis) return
+    try {
+        const paymentMeta = extra?._meta?.["x402/payment"]
+        if (!paymentMeta) return
+        const decodedRaw = JSON.parse(Buffer.from(paymentMeta as string, "base64").toString())
+        const auth = decodedRaw?.payload?.authorization ?? {}
+        const payer = auth.from ?? null
+        const recipient = auth.to ?? null
+        const amount = auth.value ?? null
+        const asset = auth.asset ?? decodedRaw?.asset ?? null
+        const chain = auth.chain ?? auth.chainId ?? decodedRaw?.chainId ?? null
+        const txHash = decodedRaw?.txHash ?? decodedRaw?.transactionHash ?? auth?.hash ?? null
+        const now = Date.now()
+        const id = String(txHash ?? `${now}-${Math.random().toString(36).slice(2, 10)}`)
 
-		// Store a hash for quick querying
-		await redis.hset(`payments:${id}`,
-			{
-				id,
-				at: String(now),
-				gameId: GAME_ID,
-				tool: toolName,
-				payer: payer ? String(payer) : "",
-				recipient: recipient ? String(recipient) : "",
-				amount: amount != null ? String(amount) : "",
-				asset: asset != null ? String(asset) : "",
-				chain: chain != null ? String(chain) : "",
-				txHash: txHash != null ? String(txHash) : "",
-				raw: JSON.stringify(decodedRaw),
-			}
-		)
-		// Append to overall and per-game lists (newest first)
-		await redis.lpush(paymentsAllListKey, id)
-		await redis.lpush(paymentsByGameListKey, id)
-	} catch {
-		// ignore logging failures
-	}
+        // Store a hash for quick querying
+        await redis.hset(`payments:${id}`,
+            {
+                id,
+                at: String(now),
+                gameId: GAME_ID,
+                tool: toolName,
+                payer: payer ? String(payer) : "",
+                recipient: recipient ? String(recipient) : "",
+                amount: amount != null ? String(amount) : "",
+                asset: asset != null ? String(asset) : "",
+                chain: chain != null ? String(chain) : "",
+                txHash: txHash != null ? String(txHash) : "",
+                raw: JSON.stringify(decodedRaw),
+            }
+        )
+        // Append to overall and per-game lists (newest first)
+        await redis.lpush(paymentsAllListKey, id)
+        await redis.lpush(paymentsByGameListKey, id)
+    } catch {
+        // ignore logging failures
+    }
 }
 
 type PaymentRow = {
@@ -526,7 +493,7 @@ function seededRandom(seed: number) {
     }
 }
 
-function spawnFood(rng: () => number, obstacles: Set<string>, snake: Point[], rules: EpisodeRules): Point & { bad: boolean } {
+function spawnFood(rng: () => number, obstacles: Set<string>, snake: Point[], rules: EpisodeRules, meta: CanvasMeta): Point & { bad: boolean } {
     const occ = new Set<string>([...obstacles, ...snake.map((p) => `${p.x},${p.y}`)])
     // oversample attempts
     for (let i = 0; i < 2000; i++) {
@@ -545,7 +512,7 @@ function spawnFood(rng: () => number, obstacles: Set<string>, snake: Point[], ru
 type ObservationGridCell = 0 | 1 | 2 | 3 | 4 // empty, snake, head, food, obstacle
 
 
-async function drawGame(g: SnakeGame, agentId: string) {
+async function drawGame(g: SnakeGame, agentId: string, meta: CanvasMeta, pixels: Uint8Array) {
     const bgColor = "#000000"
     const bodyColor = "#00FF00"
     const headColor = "#FFFF00"
@@ -553,38 +520,35 @@ async function drawGame(g: SnakeGame, agentId: string) {
     const foodBadColor = "#FF00FF"
     const obstacleColor = "#444444"
 
-    const updates: { x: number; y: number; color: string }[] = []
-
-    // Fill background first
-    for (let y = 0; y < meta.height; y++) {
-        for (let x = 0; x < meta.width; x++) {
-            updates.push({ x, y, color: bgColor })
-        }
-    }
+    // Paint background
+    const bgIdx = colorToIndex(meta, bgColor)
+    pixels.fill(bgIdx)
 
     // Obstacles
     for (const key of g.obstacles) {
         const [sx, sy] = key.split(",")
         const x = Number(sx)
         const y = Number(sy)
-        updates.push({ x, y, color: obstacleColor })
+        const idx = y * meta.width + x
+        pixels[idx] = colorToIndex(meta, obstacleColor)
     }
 
     // Food
-    updates.push({ x: g.food.x, y: g.food.y, color: g.food.bad ? foodBadColor : foodGoodColor })
-
-    // Snake segments (head last so it overwrites body/bg)
-    for (let i = 0; i < g.snake.length; i++) {
-        const segment = g.snake[i]
-        if (!segment) continue
-        updates.push({ x: segment.x, y: segment.y, color: i === g.snake.length - 1 ? headColor : bodyColor })
+    {
+        const idx = g.food.y * meta.width + g.food.x
+        pixels[idx] = colorToIndex(meta, g.food.bad ? foodBadColor : foodGoodColor)
     }
 
-    // Apply all updates and record as a single event for this turn
-    await setPixels({ updates, source: `agent:${agentId}:turn:${g.turn}` })
+    // Snake segments (head last)
+    for (let i = 0; i < g.snake.length; i++) {
+        const s = g.snake[i]
+        if (!s) continue
+        const idx = s.y * meta.width + s.x
+        pixels[idx] = colorToIndex(meta, i === g.snake.length - 1 ? headColor : bodyColor)
+    }
 }
 
-function advance(g: SnakeGame, nextDir: Direction): SnakeGame {
+function advance(g: SnakeGame, nextDir: Direction, meta: CanvasMeta): SnakeGame {
     // Prevent reversing into self directly in one step
     const dir = (() => {
         const opposite: Record<Direction, Direction> = { up: "down", down: "up", left: "right", right: "left" }
@@ -669,7 +633,7 @@ function advance(g: SnakeGame, nextDir: Direction): SnakeGame {
             rewardDelta += 1
             pendingGrowth += g.rules.growthFactor
             // spawn new food
-            newFood = spawnFood(g.rng, g.obstacles, newSnake, g.rules)
+            newFood = spawnFood(g.rng, g.obstacles, newSnake, g.rules, meta)
             stats.foodSpawned += 1
         }
     }
@@ -678,18 +642,14 @@ function advance(g: SnakeGame, nextDir: Direction): SnakeGame {
     return { ...g, snake: newSnake, dir, food: newFood, alive, turn: g.turn + 1, pendingGrowth, stats }
 }
 
-export async function getOrInitGame(): Promise<SnakeGame> {
-    if (game) return game
-    await initEpisode()
-    return game as unknown as SnakeGame
-}
+// Removed global getOrInitGame; episodes are always loaded/persisted per agent
 
-async function initEpisode(params?: { seed?: number; gridSize?: [number, number] }, agentId?: string) {
+async function initEpisode(params?: { seed?: number; gridSize?: [number, number] }, agentId?: string): Promise<{ meta: CanvasMeta; pixels: Uint8Array; game: SnakeGame }> {
     const seed = params?.seed ?? Date.now() >>> 0
     const { rng, state: rngState } = createRngFromSeed(seed)
-    const width = params?.gridSize?.[0] ?? (8 + Math.floor(rng() * 13)) // 8..20
+    const width = params?.gridSize?.[0] ?? (8 + Math.floor(rng() * 13))
     const height = params?.gridSize?.[1] ?? (8 + Math.floor(rng() * 13))
-    resizeCanvas(width, height)
+    const { meta, pixels } = createEmptyCanvas(width, height)
 
     const gChoices = [1, 2, 3] as const
     const rules: EpisodeRules = {
@@ -700,7 +660,6 @@ async function initEpisode(params?: { seed?: number; gridSize?: [number, number]
         obstacleDensity: rng() * 0.1,
     }
 
-    // initial snake length 2
     const startX = Math.floor(rng() * Math.max(2, width - 2))
     const startY = Math.floor(rng() * Math.max(2, height - 2))
     const dirs: Direction[] = ['up', 'down', 'left', 'right']
@@ -711,7 +670,6 @@ async function initEpisode(params?: { seed?: number; gridSize?: [number, number]
         { x: startX, y: startY },
         { x: Math.max(0, Math.min(width - 1, second.x)), y: Math.max(0, Math.min(height - 1, second.y)) },
     ]
-    // obstacles
     const obstacles = new Set<string>()
     const cells = width * height
     const maxObstacles = Math.floor(cells * rules.obstacleDensity)
@@ -723,7 +681,7 @@ async function initEpisode(params?: { seed?: number; gridSize?: [number, number]
         obstacles.add(key)
     }
 
-    const f = spawnFood(rng, obstacles, snake, rules)
+    const f = spawnFood(rng, obstacles, snake, rules, meta)
     const stats: EpisodeStats = { rewardTotal: 0, foodSpawned: 1, foodEaten: 0, steps: 0 }
     const start: SnakeGame = {
         snake,
@@ -739,42 +697,29 @@ async function initEpisode(params?: { seed?: number; gridSize?: [number, number]
         rng,
         rngState,
     }
-    game = start
-    await drawGame(game, agentId ?? "anonymous")
-    await saveAgentEpisode(agentId ?? "anonymous", game)
+    await drawGame(start, agentId ?? "anonymous", meta, pixels)
+    await saveAgentEpisode(agentId ?? "anonymous", meta, pixels, start)
+    return { meta, pixels, game: start }
 }
 
-export async function stepGame(direction: Direction, agentId: string): Promise<SnakeGame> {
-    // Always hydrate from storage for serverless statelessness
+export async function stepGame(direction: Direction, agentId: string): Promise<{ meta: CanvasMeta; pixels: Uint8Array; game: SnakeGame; conflict?: boolean; currentTurn?: number }> {
     const loaded = await loadAgentEpisode(agentId)
-    if (loaded) {
-        meta = loaded.meta
-        pixels = new Uint8Array(Buffer.from(loaded.pixelsBase64, "base64"))
-        game = deserializeGame(loaded.game)
-    } else {
-        await initEpisode(undefined, agentId)
+    if (!loaded) {
+        return await initEpisode(undefined, agentId)
     }
-    let current = game as SnakeGame
-    // If previous episode already ended, return the final state without auto-restart
+    const meta = loaded.meta
+    const pixels = new Uint8Array(Buffer.from(loaded.pixelsBase64, "base64"))
+    const current = deserializeGame(loaded.game)
     if (!current.alive) {
-        return current
+        return { meta, pixels, game: current }
     }
-
-    const next = advance(current, direction)
-
-    if (!next.alive) {
-        // Episode end → record and persist final board; do not auto-restart
-        await recordEpisodeResult(agentId, next.stats)
-        game = next
-        await drawGame(next, agentId)
-        await saveAgentEpisode(agentId, next)
-        return next
+    const next = advance(current, direction, meta)
+    await drawGame(next, agentId, meta, pixels)
+    const res = await saveAgentEpisode(agentId, meta, pixels, next, current.turn)
+    if ((res as any).conflict) {
+        return { meta, pixels, game: current, conflict: true, currentTurn: (res as any).currentTurn }
     }
-
-    game = next
-    await drawGame(next, agentId)
-    await saveAgentEpisode(agentId, next)
-    return next
+    return { meta, pixels, game: next }
 }
 
 const app = new Hono()
@@ -854,162 +799,155 @@ function renderCanvasHtml(state: CanvasState): string {
 </html>`
 }
 
-const move = async (direction: "up" | "down" | "left" | "right", agentId: string) => {
-    const g = await stepGame(direction, agentId)
-    const grid = await getGrid()
-    const payload = { turn: g.turn, alive: g.alive, dir: g.dir, grid }
-    return payload
-}
+// Removed legacy move helper; stepGame returns full local snapshot
 
 const handler = (recipient: string) => createMcpPaidHandler(
     (server) => {
 
         server.paidTool(
-            "start", 
-            "Start a new Snake++ episode", 
+            "start",
+            "Start a new Snake++ episode",
             "$0.001",
-            {}, 
+            {},
             {},
             async (_, extra) => {
                 const agentId = resolveAgentId(extra)
                 await logPaymentFromExtra(extra, "start")
 
                 // start fresh episode each time start is called
-            await initEpisode(undefined, agentId)
-            const g = await getOrInitGame()
-            const uri = (`ui://place/${agentId}`) as `ui://${string}`;
+                const { meta, pixels, game } = await initEpisode(undefined, agentId)
+                const uri = (`ui://place/${agentId}`) as `ui://${string}`;
 
-            const state = await getCanvas()
-            const grid = await getGrid()
-            const payload = { turn: g.turn, alive: g.alive, dir: g.dir, grid }
+                const state = canvasToState(meta, pixels)
+                const grid = await pixelsToGrid(meta, pixels)
+                const payload = { turn: game.turn, alive: game.alive, dir: game.dir, grid }
 
-            const html = renderCanvasHtml(state)
+                const html = renderCanvasHtml(state)
 
-            const resource = createUIResource({
-                uri,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-            return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-        })
+                const resource = createUIResource({
+                    uri,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
+            })
 
-		server.paidTool(
-			"reset", 
-			"Reset and start a new episode", 
-			"$0.001",
-			{}, 
-			{},
+        server.paidTool(
+            "reset",
+            "Reset and start a new episode",
+            "$0.001",
+            {},
+            {},
             async (_, extra) => {
-            const agentId = resolveAgentId(extra)
-            await logPaymentFromExtra(extra, "reset")
-            await initEpisode(undefined, agentId)
-            const g = await getOrInitGame()
-            const state = await getCanvas()
-            const grid = await getGrid()
-            const payload = { turn: g.turn, alive: g.alive, dir: g.dir, grid }
-            const html = renderCanvasHtml(state)
-            const resource = createUIResource({
-                uri: `ui://place/${agentId}`,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-            return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-        })
+                const agentId = resolveAgentId(extra)
+                await logPaymentFromExtra(extra, "reset")
+                const { meta, pixels, game } = await initEpisode(undefined, agentId)
+                const state = canvasToState(meta, pixels)
+                const grid = await pixelsToGrid(meta, pixels)
+                const payload = { turn: game.turn, alive: game.alive, dir: game.dir, grid }
+                const html = renderCanvasHtml(state)
+                const resource = createUIResource({
+                    uri: `ui://place/${agentId}`,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
+            })
 
         server.tool(
-            "leaderboard", 
-            "Get top 10 leaderboard", 
-            {}, 
+            "leaderboard",
+            "Get top 10 leaderboard",
+            {},
             async () => {
-            const top = await getTopLeaderboard(10)
-            const html = `<!doctype html><html><body><pre>${top.map((r, i) => `${i + 1}. ${r.agentId} - ${r.score}`).join("\n")}</pre></body></html>`
-            const resource = createUIResource({ uri: `ui://place`, content: { type: 'rawHtml', htmlString: html }, encoding: 'text' })
-            return { content: [resource] } as const
-        })
+                const top = await getTopLeaderboard(10)
+                const html = `<!doctype html><html><body><pre>${top.map((r, i) => `${i + 1}. ${r.agentId} - ${r.score}`).join("\n")}</pre></body></html>`
+                const resource = createUIResource({ uri: `ui://place`, content: { type: 'rawHtml', htmlString: html }, encoding: 'text' })
+                return { content: [resource] } as const
+            })
 
-		server.paidTool(
-			"up", 
-			"Advance one turn moving up", 
-			"$0.001",
-			{}, 
-			{},
+        server.paidTool(
+            "up",
+            "Advance one turn moving up",
+            "$0.001",
+            {},
+            {},
             async (_, extra) => {
-            const agentId = resolveAgentId(extra)
-            await logPaymentFromExtra(extra, "up")
-            const payload = await move("up", agentId)
-            const state = await getCanvas()
-            const html = renderCanvasHtml(state)
+                const agentId = resolveAgentId(extra)
+                await logPaymentFromExtra(extra, "up")
+                const result = await stepGame("up", agentId)
+                const state = canvasToState(result.meta, result.pixels)
+                const html = renderCanvasHtml(state)
 
-            const resource = createUIResource({
-                uri: `ui://place/${agentId}`,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-            return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-        })
+                const resource = createUIResource({
+                    uri: `ui://place/${agentId}`,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify({ turn: result.game.turn, alive: result.game.alive, dir: result.game.dir, grid: await pixelsToGrid(result.meta, result.pixels) }) }] } as const;
+            })
 
-		server.paidTool(
-			"down", 
-			"Advance one turn moving down", 
-			"$0.001",
-			{}, 
-			{},
+        server.paidTool(
+            "down",
+            "Advance one turn moving down",
+            "$0.001",
+            {},
+            {},
             async (_, extra) => {
-            const agentId = resolveAgentId(extra)
-            await logPaymentFromExtra(extra, "down")
-            const payload = await move("down", agentId)
-            const state = await getCanvas()
-            const html = renderCanvasHtml(state)
+                const agentId = resolveAgentId(extra)
+                await logPaymentFromExtra(extra, "down")
+                const result = await stepGame("down", agentId)
+                const state = canvasToState(result.meta, result.pixels)
+                const html = renderCanvasHtml(state)
 
-            const resource = createUIResource({
-                uri: `ui://place/${agentId}`,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-			return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-		})
+                const resource = createUIResource({
+                    uri: `ui://place/${agentId}`,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify({ turn: result.game.turn, alive: result.game.alive, dir: result.game.dir, grid: await pixelsToGrid(result.meta, result.pixels) }) }] } as const;
+            })
 
-		server.paidTool(
-			"left", 
-			"Advance one turn moving left", 
-			"$0.001",
-			{}, 
-			{},
+        server.paidTool(
+            "left",
+            "Advance one turn moving left",
+            "$0.001",
+            {},
+            {},
             async (_, extra) => {
-            const agentId = resolveAgentId(extra)
-            await logPaymentFromExtra(extra, "left")
-            const payload = await move("left", agentId)
-            const state = await getCanvas()
-            const html = renderCanvasHtml(state)
+                const agentId = resolveAgentId(extra)
+                await logPaymentFromExtra(extra, "left")
+                const result = await stepGame("left", agentId)
+                const state = canvasToState(result.meta, result.pixels)
+                const html = renderCanvasHtml(state)
 
-            const resource = createUIResource({
-                uri: `ui://place/${agentId}`,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-            return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-        })
+                const resource = createUIResource({
+                    uri: `ui://place/${agentId}`,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify({ turn: result.game.turn, alive: result.game.alive, dir: result.game.dir, grid: await pixelsToGrid(result.meta, result.pixels) }) }] } as const;
+            })
 
-		server.paidTool(
-			"right", 
-			"Advance one turn moving right", 
-			"$0.001",
-			{}, 
-			{},
+        server.paidTool(
+            "right",
+            "Advance one turn moving right",
+            "$0.001",
+            {},
+            {},
             async (_, extra) => {
-            const agentId = resolveAgentId(extra)
-            await logPaymentFromExtra(extra, "right")
-            const payload = await move("right", agentId)
-            const state = await getCanvas()
-            const html = renderCanvasHtml(state)
+                const agentId = resolveAgentId(extra)
+                await logPaymentFromExtra(extra, "right")
+                const result = await stepGame("right", agentId)
+                const state = canvasToState(result.meta, result.pixels)
+                const html = renderCanvasHtml(state)
 
-            const resource = createUIResource({
-                uri: `ui://place/${agentId}`,
-                content: { type: 'rawHtml', htmlString: html },
-                encoding: 'text',
-            });
-			return { content: [resource, { type: 'text', text: JSON.stringify(payload) }] } as const;
-		})
+                const resource = createUIResource({
+                    uri: `ui://place/${agentId}`,
+                    content: { type: 'rawHtml', htmlString: html },
+                    encoding: 'text',
+                });
+                return { content: [resource, { type: 'text', text: JSON.stringify({ turn: result.game.turn, alive: result.game.alive, dir: result.game.dir, grid: await pixelsToGrid(result.meta, result.pixels) }) }] } as const;
+            })
     },
     {
         facilitator: {
@@ -1024,7 +962,7 @@ const handler = (recipient: string) => createMcpPaidHandler(
     },
     { serverInfo: { name: "snake-mcp", version: "1.0.0" } },
     {
-        maxDuration: 60, 
+        maxDuration: 60,
         verboseLogs: true,
 
     },
@@ -1032,12 +970,13 @@ const handler = (recipient: string) => createMcpPaidHandler(
 
 app.all("*", async (c) => {
     const leaderboard = await getTopLeaderboard(1)
-    if (!leaderboard[0]?.agentId) {
+    const topPerformer = leaderboard[0]?.agentId
+    if (!topPerformer) {
         return new Response("No leaderboard found", { status: 500 })
     }
 
-    console.log("Leaderboard", leaderboard[0]?.agentId)
-    return handler(leaderboard[0]?.agentId)(c.req.raw)
+    console.log("Leaderboard", topPerformer)
+    return handler(topPerformer)(c.req.raw)
 })
 
 export default {
