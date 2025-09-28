@@ -110,6 +110,18 @@ const getPayer = (extra: any) => {
     }
 }
 
+function normalizeAgentId(id: string | null | undefined): string {
+    const s = id != null ? String(id) : ""
+    return s.trim().toLowerCase() || "anonymous"
+}
+
+let currentAgentId = "anonymous"
+function resolveAgentId(extra: any, fallbackId = "anonymous"): string {
+    const payer = getPayer(extra)
+    const id = normalizeAgentId(payer || fallbackId)
+    return id
+}
+
 function resizeCanvas(width: number, height: number) {
     meta = { ...meta, width, height }
     pixels = new Uint8Array(width * height)
@@ -743,20 +755,20 @@ export async function stepGame(direction: Direction, agentId: string): Promise<S
         await initEpisode(undefined, agentId)
     }
     let current = game as SnakeGame
-    // If previous episode ended, auto-restart before applying the next action
+    // If previous episode already ended, return the final state without auto-restart
     if (!current.alive) {
-        await initEpisode(undefined, agentId)
-        current = game as SnakeGame
+        return current
     }
 
     const next = advance(current, direction)
 
     if (!next.alive) {
-        // Episode end → record and immediately restart a fresh episode
+        // Episode end → record and persist final board; do not auto-restart
         await recordEpisodeResult(agentId, next.stats)
-        await initEpisode(undefined, agentId)
-        const restarted = game as SnakeGame
-        return restarted
+        game = next
+        await drawGame(next, agentId)
+        await saveAgentEpisode(agentId, next)
+        return next
     }
 
     game = next
@@ -859,13 +871,13 @@ const handler = (recipient: string) => createMcpPaidHandler(
             {}, 
             {},
             async (_, extra) => {
-                const agentId = getPayer(extra) ?? "anonymous"
+                const agentId = resolveAgentId(extra)
                 await logPaymentFromExtra(extra, "start")
 
                 // start fresh episode each time start is called
             await initEpisode(undefined, agentId)
             const g = await getOrInitGame()
-            const uri = (`ui://place`) as `ui://${string}`;
+            const uri = (`ui://place/${agentId}`) as `ui://${string}`;
 
             const state = await getCanvas()
             const grid = await getGrid()
@@ -888,7 +900,7 @@ const handler = (recipient: string) => createMcpPaidHandler(
 			{}, 
 			{},
             async (_, extra) => {
-            const agentId = getPayer(extra) ?? "anonymous"
+            const agentId = resolveAgentId(extra)
             await logPaymentFromExtra(extra, "reset")
             await initEpisode(undefined, agentId)
             const g = await getOrInitGame()
@@ -897,7 +909,7 @@ const handler = (recipient: string) => createMcpPaidHandler(
             const payload = { turn: g.turn, alive: g.alive, dir: g.dir, grid }
             const html = renderCanvasHtml(state)
             const resource = createUIResource({
-                uri: `ui://place`,
+                uri: `ui://place/${agentId}`,
                 content: { type: 'rawHtml', htmlString: html },
                 encoding: 'text',
             });
@@ -922,14 +934,14 @@ const handler = (recipient: string) => createMcpPaidHandler(
 			{}, 
 			{},
             async (_, extra) => {
-            const agentId = getPayer(extra) ?? "anonymous"
+            const agentId = resolveAgentId(extra)
             await logPaymentFromExtra(extra, "up")
             const payload = await move("up", agentId)
             const state = await getCanvas()
             const html = renderCanvasHtml(state)
 
             const resource = createUIResource({
-                uri: `ui://place`,
+                uri: `ui://place/${agentId}`,
                 content: { type: 'rawHtml', htmlString: html },
                 encoding: 'text',
             });
@@ -943,14 +955,14 @@ const handler = (recipient: string) => createMcpPaidHandler(
 			{}, 
 			{},
             async (_, extra) => {
-            const agentId = getPayer(extra) ?? "anonymous"
+            const agentId = resolveAgentId(extra)
             await logPaymentFromExtra(extra, "down")
             const payload = await move("down", agentId)
             const state = await getCanvas()
             const html = renderCanvasHtml(state)
 
             const resource = createUIResource({
-                uri: `ui://place`,
+                uri: `ui://place/${agentId}`,
                 content: { type: 'rawHtml', htmlString: html },
                 encoding: 'text',
             });
@@ -964,14 +976,14 @@ const handler = (recipient: string) => createMcpPaidHandler(
 			{}, 
 			{},
             async (_, extra) => {
-            const agentId = getPayer(extra) ?? "anonymous"
+            const agentId = resolveAgentId(extra)
             await logPaymentFromExtra(extra, "left")
             const payload = await move("left", agentId)
             const state = await getCanvas()
             const html = renderCanvasHtml(state)
 
             const resource = createUIResource({
-                uri: `ui://place`,
+                uri: `ui://place/${agentId}`,
                 content: { type: 'rawHtml', htmlString: html },
                 encoding: 'text',
             });
@@ -985,14 +997,14 @@ const handler = (recipient: string) => createMcpPaidHandler(
 			{}, 
 			{},
             async (_, extra) => {
-            const agentId = getPayer(extra) ?? "anonymous"
+            const agentId = resolveAgentId(extra)
             await logPaymentFromExtra(extra, "right")
             const payload = await move("right", agentId)
             const state = await getCanvas()
             const html = renderCanvasHtml(state)
 
             const resource = createUIResource({
-                uri: `ui://place`,
+                uri: `ui://place/${agentId}`,
                 content: { type: 'rawHtml', htmlString: html },
                 encoding: 'text',
             });
