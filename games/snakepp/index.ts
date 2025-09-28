@@ -951,7 +951,7 @@ const handler = (recipient: string) => createMcpPaidHandler(
     },
     {
         facilitator: {
-            "url": "https://facilitator.payai.network",
+            "url": "https://facilitator.x402.rs",
         },
         recipient: {
             evm: {
